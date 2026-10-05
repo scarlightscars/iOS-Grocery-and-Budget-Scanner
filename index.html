@@ -289,11 +289,12 @@ function paintSheet() {
   $('#fQty').textContent = ed.qty;
   $('#fCat').innerHTML = CATS.map(c => `<button type="button" data-cat="${c}" class="chip ${c === ed.cat ? 'on' : ''}" style="padding:7px 12px;font-size:13px">${c}</button>`).join('');
 }
-$('#fCat').addEventListener('click', e => { const b = e.target.closest('[data-cat]'); if (b) { ed.cat = b.dataset.cat; paintSheet(); } });
+$('#fCat').addEventListener('click', e => { const b = e.target.closest('[data-cat]'); if (b) { ed.cat = b.dataset.cat; ed.catTouched = true; paintSheet(); } });
+$('#fName').addEventListener('input', () => { if (ed) ed.touched = true; });
 $('#fInc').onclick = () => { ed.qty = Math.min(99, ed.qty + 1); paintSheet(); buzz(); };
 $('#fDec').onclick = () => { ed.qty = Math.max(1, ed.qty - 1); paintSheet(); buzz(); };
 function openSheet(mode, d = {}) {
-  ed = { mode, id: d.id, qty: d.quantity || 1, cat: d.category || 'Other' };
+  ed = { mode, id: d.id, qty: d.quantity || 1, cat: d.category || 'Other', tok: d.tok };
   $('#sheetTitle').textContent = { add: 'Add item', edit: 'Edit item', scan: 'Confirm scan' }[mode];
   $('#fName').value = d.name || ''; $('#fPrice').value = d.unitPrice != null ? Number(d.unitPrice).toFixed(2) : '';
   $('#photoBox').classList.toggle('hidden', !d.photo); if (d.photo) $('#photo').src = d.photo;
@@ -332,17 +333,16 @@ $('#btnClear').onclick = () => {
 };
 
 /* ---------- Camera + OCR ---------- */
-let stream = null, worker = null, busy = false, scanOpen = false, auto = true, laserTw = null, loopId = 0;
+let stream = null, wp = null, wmode = '', busy = false, scanOpen = false, auto = true, laserTw = null, loopId = 0, tok = 0, streak = 0, lastPrice = null, wantManual = false;
 const vid = $('#vid');
 const setStatus = t => $('#scStatus').textContent = t;
+const MODES = {
+  price: { tessedit_pageseg_mode: '11', tessedit_char_whitelist: '0123456789.,P$' },
+  text: { tessedit_pageseg_mode: '6', tessedit_char_whitelist: "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789 &'-%" }
+};
+function getWorker() { return wp || (wp = Tesseract.createWorker('eng', 1).catch(e => { wp = null; throw e; })); }
+async function useMode(m) { const w = await getWorker(); if (wmode !== m) { await w.setParameters(MODES[m]); wmode = m; } return w; }
 
-async function getWorker() {
-  if (!worker) {
-    worker = await Tesseract.createWorker('eng', 1, { logger: m => { if (busy && m.status === 'recognizing text') setStatus('Reading… ' + Math.round(m.progress * 100) + '%'); } });
-    await worker.setParameters({ tessedit_pageseg_mode: '6' });
-  }
-  return worker;
-}
 async function openScanner() {
   scanOpen = true; $('#camErr').classList.add('hidden'); $('#scan').classList.remove('hidden');
   gsap.fromTo('#scan', { opacity: 0 }, { opacity: 1, duration: .3 });
@@ -369,61 +369,89 @@ function closeScanner() {
   stream && stream.getTracks().forEach(t => t.stop()); stream = null; vid.srcObject = null;
   $('#scan').classList.add('hidden');
 }
-function grabCrop() {
+function grabCrop(W) {
   const r = $('#vf').getBoundingClientRect(), vr = vid.getBoundingClientRect(), vw = vid.videoWidth, vh = vid.videoHeight;
   const s = Math.max(vr.width / vw, vr.height / vh), ox = (vw * s - vr.width) / 2, oy = (vh * s - vr.height) / 2;
   const sx = (r.left - vr.left + ox) / s, sy = (r.top - vr.top + oy) / s, sW = r.width / s, sH = r.height / s;
-  const c = document.createElement('canvas'); c.width = 1200; c.height = Math.round(1200 * sH / sW);
+  const c = document.createElement('canvas'); c.width = W; c.height = Math.round(W * sH / sW);
   c.getContext('2d').drawImage(vid, sx, sy, sW, sH, 0, 0, c.width, c.height);
   return c;
 }
-function preprocess(c) { // grayscale + contrast stretch
-  const x = c.getContext('2d'), d = x.getImageData(0, 0, c.width, c.height), p = d.data; let sum = 0;
-  for (let i = 0; i < p.length; i += 4) { const g = .299 * p[i] + .587 * p[i + 1] + .114 * p[i + 2]; p[i] = g; sum += g; }
-  const mean = sum / (p.length / 4), k = 1.8;
-  for (let i = 0; i < p.length; i += 4) { let g = (p[i] - mean) * k + mean; g = g < 0 ? 0 : g > 255 ? 255 : g; p[i] = p[i + 1] = p[i + 2] = g; }
+function preprocess(c) { // grayscale -> Otsu threshold -> dark text on white -> padded
+  const x = c.getContext('2d'), d = x.getImageData(0, 0, c.width, c.height), p = d.data, n = p.length / 4, h = new Uint32Array(256);
+  for (let i = 0; i < p.length; i += 4) { const g = (.299 * p[i] + .587 * p[i + 1] + .114 * p[i + 2]) | 0; p[i] = g; h[g]++; }
+  let sum = 0; for (let t = 0; t < 256; t++) sum += t * h[t];
+  let wB = 0, sB = 0, max = 0, th = 128;
+  for (let t = 0; t < 256; t++) {
+    wB += h[t]; if (!wB) continue; const wF = n - wB; if (!wF) break; sB += t * h[t];
+    const mB = sB / wB, mF = (sum - sB) / wF, v = wB * wF * (mB - mF) * (mB - mF); if (v > max) { max = v; th = t; }
+  }
+  let dark = 0; for (let i = 0; i < p.length; i += 4) if (p[i] <= th) dark++;
+  const inv = dark > n / 2; // dark background -> flip so text is always dark
+  for (let i = 0; i < p.length; i += 4) { const light = p[i] > th; p[i] = p[i + 1] = p[i + 2] = (inv ? !light : light) ? 255 : 0; p[i + 3] = 255; }
   x.putImageData(d, 0, 0);
+  const o = document.createElement('canvas'), pad = 24; o.width = c.width + pad * 2; o.height = c.height + pad * 2;
+  const ox = o.getContext('2d'); ox.fillStyle = '#fff'; ox.fillRect(0, 0, o.width, o.height); ox.drawImage(c, pad, pad);
+  return o;
 }
 const CATMAP = [['Produce', /apple|banana|tomato|lettuce|onion|potato|fruit|veg|carrot|orange|grape/i], ['Dairy', /milk|cheese|yogurt|butter|egg|cream/i], ['Meat', /chicken|beef|pork|fish|bacon|ham|sausage|steak/i], ['Bakery', /bread|bun|cake|bagel|muffin/i], ['Drinks', /juice|soda|water|coffee|tea|beer|wine|cola/i], ['Snacks', /chips|cookie|candy|chocolate|cracker|nuts/i], ['Household', /soap|paper|detergent|tissue|towel|clean/i], ['Pantry', /rice|pasta|sauce|flour|sugar|oil|cereal|beans|salt/i]];
 const guessCat = t => { for (const [c, re] of CATMAP) if (re.test(t || '')) return c; return 'Other'; };
-function parseOCR(data) {
-  const lines = (data.lines || (data.blocks || []).flatMap(b => b.paragraphs.flatMap(p => p.lines))).filter(l => l.text && l.text.trim());
-  const re = /[₱$P]?\s?(\d{1,5})\s?[.,]\s?(\d{2})(?!\d)/g; let best = null;
-  const H = l => l.bbox ? l.bbox.y1 - l.bbox.y0 : 10, Y = l => l.bbox ? (l.bbox.y0 + l.bbox.y1) / 2 : 0;
-  lines.forEach(l => { let m; re.lastIndex = 0; while ((m = re.exec(l.text))) { const v = parseFloat(m[1] + '.' + m[2]); if (v > 0 && v < 100000 && (!best || H(l) > best.h)) best = { v, h: H(l), l }; } });
-  if (!best) return { price: null };
-  let title = null, bd = Infinity;
-  lines.forEach(l => {
-    const t = l.text.replace(/[₱$]?\d+\s?[.,]\s?\d{2}/g, ' ').replace(/[^A-Za-z0-9&'\- ]/g, ' ').replace(/\s+/g, ' ').trim();
-    if ((t.match(/[A-Za-z]/g) || []).length < 3) return;
-    const d = l === best.l ? 0 : Math.abs(Y(l) - Y(best.l));
-    if (d < bd) { bd = d; title = t; }
+const getLines = data => (data.lines || (data.blocks || []).flatMap(b => b.paragraphs.flatMap(p => p.lines))).filter(l => l.text && l.text.trim());
+const lineH = l => l.bbox ? l.bbox.y1 - l.bbox.y0 : 10;
+function parsePrice(data, loose) {
+  const lines = getLines(data); let best = null;
+  const scan = (re, val) => lines.forEach(l => {
+    let m; re.lastIndex = 0;
+    while ((m = re.exec(l.text))) { const v = val(m); if (v > 0 && v < 100000 && (!best || lineH(l) > best.h)) best = { v, h: lineH(l) }; }
   });
-  if (title) title = title.toLowerCase().replace(/\b\w/g, c => c.toUpperCase()).slice(0, 40);
-  return { price: best.v, title };
+  scan(/(\d{1,5})\s?[.,]\s?(\d{2})(?!\d)/g, m => parseFloat(m[1] + '.' + m[2]));
+  if (!best && loose) scan(/\b(\d{2,5})\b/g, m => parseFloat(m[1])); // whole-peso tags
+  return best ? best.v : null;
 }
-async function attempt(silent) {
+function parseTitle(data) {
+  let best = null;
+  getLines(data).forEach(l => {
+    const t = l.text.replace(/[^A-Za-z0-9&'\- ]/g, ' ').replace(/\s+/g, ' ').trim();
+    const letters = (t.match(/[A-Za-z]/g) || []).length;
+    if (letters < 3 || letters < t.replace(/ /g, '').length * .6) return;
+    const sc = lineH(l) * letters; if (!best || sc > best.sc) best = { t, sc };
+  });
+  return best ? best.t.toLowerCase().replace(/\b\w/g, c => c.toUpperCase()).slice(0, 40) : null;
+}
+async function fillTitle(c, t) { // runs after the confirm sheet is already open
+  try {
+    const w = await useMode('text'), { data } = await w.recognize(c);
+    if (!ed || ed.tok !== t || ed.touched) return;
+    const title = parseTitle(data); if (!title) return;
+    $('#fName').value = title; if (!ed.catTouched) { ed.cat = guessCat(title); paintSheet(); }
+  } catch (e) {}
+}
+async function attempt(manual) {
   if (busy || !vid.videoWidth) return;
   busy = true; const id = loopId;
-  if (!silent) setStatus('Capturing…');
   try {
-    const c = grabCrop(), photo = c.toDataURL('image/jpeg', .7); preprocess(c);
-    const w = await getWorker(), { data } = await w.recognize(c);
+    const raw = grabCrop(640), pc = preprocess(grabCrop(640));
+    const w = await useMode('price'), { data } = await w.recognize(pc);
     if (!scanOpen || id !== loopId) return;
-    const r = parseOCR(data);
-    if (r.price == null) { setStatus(silent ? 'Looking for a price…' : 'No price found. Move closer or add light.'); if (!silent) shake('#vf'); return; }
-    buzz(); closeScanner();
-    openSheet('scan', { name: r.title || `Scanned Item #${S.seq}`, unitPrice: r.price, photo, category: guessCat(r.title) });
+    const man = manual || wantManual; wantManual = false;
+    const v = parsePrice(data, man);
+    if (v == null) { streak = 0; lastPrice = null; setStatus(man ? 'No price found. Move closer or add light.' : 'Looking for a price…'); if (man) shake('#vf'); return; }
+    if (v === lastPrice) streak++; else { lastPrice = v; streak = 1; }
+    if (!man && streak < 2) { setStatus('Reading ' + money(v) + '…'); return; } // auto mode: same price twice in a row
+    const photo = raw.toDataURL('image/jpeg', .7), tc = preprocess(grabCrop(1000)), t = ++tok;
+    buzz(); closeScanner(); streak = 0; lastPrice = null;
+    openSheet('scan', { name: `Scanned Item #${S.seq}`, unitPrice: v, photo, tok: t });
+    fillTitle(tc, t);
   } catch (e) { setStatus('Scan failed: ' + (e.message || 'try again')); }
   finally { busy = false; }
 }
 async function scanLoop() {
   const id = ++loopId;
-  while (scanOpen && id === loopId) { if (auto && !busy && vid.readyState >= 2) await attempt(true); await sleep(700); }
+  while (scanOpen && id === loopId) { if (auto && !busy && vid.readyState >= 2) await attempt(false); await sleep(120); }
 }
 $('#btnScan').onclick = openScanner;
 $('#scClose').onclick = closeScanner;
-$('#scShot').onclick = () => attempt(false);
+$('#scShot').onclick = () => { if (busy) { wantManual = true; setStatus('Reading…'); } else attempt(true); };
 $('#scAuto').onclick = e => { auto = !auto; e.currentTarget.textContent = 'Auto-scan: ' + (auto ? 'on' : 'off'); };
 $('#camManual').onclick = () => { closeScanner(); openSheet('add'); };
 
@@ -431,6 +459,7 @@ $('#camManual').onclick = () => { closeScanner(); openSheet('add'); };
 lucide.createIcons();
 renderList();
 animateTotals();
+setTimeout(() => getWorker().then(() => useMode('price')).catch(() => {}), 1000); // pre-load OCR engine
 </script>
 </body>
 </html>
