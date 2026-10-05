@@ -1,0 +1,436 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, user-scalable=no">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="CartScan">
+<meta name="theme-color" content="#000000">
+<title>CartScan</title>
+<link rel="manifest" id="mf">
+<link rel="apple-touch-icon" id="ati">
+<script src="https://cdn.tailwindcss.com"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/gsap/3.12.5/gsap.min.js"></script>
+<script src="https://unpkg.com/lucide@0.383.0/dist/umd/lucide.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/tesseract.js@5/dist/tesseract.min.js"></script>
+<style>
+:root{--bg:#f2f2f7;--tx:#111;--sub:#6b6b73;--glass:rgba(255,255,255,.7);--solid:#fff;--bd:rgba(0,0,0,.08);--fld:rgba(120,120,128,.12)}
+@media(prefers-color-scheme:dark){:root{--bg:#000;--tx:#f5f5f7;--sub:#9a9aa2;--glass:rgba(44,44,50,.55);--solid:#1c1c20;--bd:rgba(255,255,255,.1);--fld:rgba(120,120,128,.24)}}
+*{-webkit-tap-highlight-color:transparent}
+html,body{overscroll-behavior-y:none}
+body{margin:0;background-color:var(--bg);color:var(--tx);font-family:-apple-system,BlinkMacSystemFont,"SF Pro Text","Segoe UI",Roboto,sans-serif;
+ background-image:radial-gradient(60% 40% at 10% 0%,rgba(10,132,255,.28),transparent),radial-gradient(50% 35% at 100% 18%,rgba(48,209,88,.2),transparent);background-attachment:fixed;-webkit-user-select:none;user-select:none}
+input{-webkit-user-select:text;user-select:text;font-size:16px;background:var(--fld);color:var(--tx);border-radius:14px;padding:12px 14px;width:100%;outline:none;border:1px solid transparent}
+input:focus{border-color:#0a84ff}
+button{transition:transform .12s ease;cursor:pointer}
+button:active{transform:scale(.95)}
+.glass{background:var(--glass);-webkit-backdrop-filter:blur(24px) saturate(160%);backdrop-filter:blur(24px) saturate(160%);border:1px solid var(--bd)}
+.chip{padding:2px 8px;border-radius:999px;background:var(--fld);font-size:11px}
+.chip.on{background:#0a84ff;color:#fff}
+.qb{width:32px;height:32px;display:flex;align-items:center;justify-content:center;border-radius:999px}
+svg.lucide{width:20px;height:20px}
+.btn{border-radius:14px;padding:13px 16px;font-weight:600;width:100%;text-align:center}
+.pulse{animation:pulse 1s ease-in-out infinite}
+@keyframes pulse{0%,100%{box-shadow:0 0 0 0 rgba(255,69,58,.65)}50%{box-shadow:0 0 14px 4px rgba(255,69,58,.65)}}
+.panel{padding-bottom:calc(env(safe-area-inset-bottom) + 16px)}
+:root{box-sizing:border-box}
+</style>
+</head>
+<body>
+
+<header class="sticky top-0 z-30 glass" style="padding-top:env(safe-area-inset-top);border-top:0;border-left:0;border-right:0">
+  <div class="flex items-center justify-between px-4 h-12">
+    <div class="flex items-center gap-2 font-bold text-lg"><i data-lucide="shopping-basket" class="text-[#30d158]"></i>CartScan</div>
+    <div class="flex items-center gap-2">
+      <span id="badge" class="text-xs font-semibold px-2.5 py-1 rounded-full" style="background:var(--fld)">No budget</span>
+      <button id="btnClear" class="qb" aria-label="Clear all"><i data-lucide="trash"></i></button>
+    </div>
+  </div>
+</header>
+
+<main class="px-4 pt-4" style="padding-bottom:170px">
+  <section class="glass rounded-3xl p-5 mb-5">
+    <div class="text-sm" style="color:var(--sub)">Grand total</div>
+    <div id="total" class="text-5xl font-extrabold tabular-nums tracking-tight mt-1">₱0.00</div>
+    <div class="flex gap-6 mt-3 text-sm tabular-nums" style="color:var(--sub)">
+      <div>Subtotal <span id="sub" class="font-semibold" style="color:var(--tx)">₱0.00</span></div>
+      <div>Tax <span id="tax" class="font-semibold" style="color:var(--tx)">₱0.00</span></div>
+    </div>
+    <div class="mt-4 h-2.5 rounded-full overflow-hidden" style="background:var(--fld)">
+      <div id="bar" class="h-full rounded-full" style="width:0;background:#30d158"></div>
+    </div>
+    <div id="budLabel" class="text-xs mt-2" style="color:var(--sub)"></div>
+  </section>
+
+  <div id="list"></div>
+  <div id="empty" class="text-center py-12" style="color:var(--sub)">
+    <i data-lucide="scan-line" class="mx-auto mb-3" style="width:40px;height:40px"></i>
+    <div class="font-semibold" style="color:var(--tx)">Your cart is empty</div>
+    <div class="text-sm mt-1">Scan a price tag or add an item by hand.</div>
+  </div>
+</main>
+
+<nav class="fixed bottom-0 inset-x-0 z-30 glass" style="padding-bottom:env(safe-area-inset-bottom);border-bottom:0;border-left:0;border-right:0">
+  <div class="flex items-end justify-around px-6 pt-2 pb-2">
+    <button id="btnAdd" class="flex flex-col items-center gap-1 text-xs w-16" style="color:var(--sub)"><i data-lucide="plus-circle" style="width:26px;height:26px"></i>Add item</button>
+    <button id="btnScan" class="-mt-7 w-[68px] h-[68px] rounded-full flex items-center justify-center text-white shadow-lg" style="background:linear-gradient(135deg,#0a84ff,#30d158);box-shadow:0 8px 24px rgba(10,132,255,.5)" aria-label="Scan price tag"><i data-lucide="camera" style="width:30px;height:30px"></i></button>
+    <button id="btnSet" class="flex flex-col items-center gap-1 text-xs w-16" style="color:var(--sub)"><i data-lucide="sliders-horizontal" style="width:26px;height:26px"></i>Budget</button>
+  </div>
+</nav>
+
+<!-- Item sheet -->
+<div id="sheet" class="hidden fixed inset-0 z-50">
+  <div class="dim absolute inset-0 bg-black/50" data-close="sheet"></div>
+  <div class="panel glass absolute bottom-0 inset-x-0 rounded-t-3xl p-5 max-h-[92%] overflow-y-auto" style="background:var(--solid)">
+    <div class="flex items-center justify-between mb-4"><h2 id="sheetTitle" class="text-lg font-bold">Add item</h2><button data-close="sheet" class="qb" style="background:var(--fld)"><i data-lucide="x"></i></button></div>
+    <div id="photoBox" class="hidden mb-4 rounded-2xl overflow-hidden" style="border:1px solid var(--bd)"><img id="photo" class="w-full max-h-32 object-cover" alt="Captured price tag"></div>
+    <label class="text-xs" style="color:var(--sub)">Name</label>
+    <input id="fName" class="mb-3 mt-1" placeholder="Item name" autocomplete="off">
+    <div class="flex gap-3 mb-3">
+      <div class="flex-1"><label class="text-xs" style="color:var(--sub)">Unit price</label><input id="fPrice" class="mt-1" inputmode="decimal" placeholder="0.00"></div>
+      <div><label class="text-xs" style="color:var(--sub)">Quantity</label>
+        <div class="mt-1 flex items-center gap-3 rounded-2xl px-2" style="background:var(--fld);height:46px">
+          <button id="fDec" class="qb"><i data-lucide="minus"></i></button><span id="fQty" class="w-6 text-center font-semibold tabular-nums">1</span><button id="fInc" class="qb"><i data-lucide="plus"></i></button>
+        </div></div>
+    </div>
+    <label class="text-xs" style="color:var(--sub)">Category</label>
+    <div id="fCat" class="flex flex-wrap gap-2 mt-2 mb-5"></div>
+    <div class="flex gap-3">
+      <button id="btnDel" class="btn hidden" style="background:rgba(255,69,58,.15);color:#ff453a">Delete</button>
+      <button id="btnSave" class="btn text-white" style="background:#0a84ff">Save item</button>
+    </div>
+  </div>
+</div>
+
+<!-- Settings sheet -->
+<div id="setg" class="hidden fixed inset-0 z-50">
+  <div class="dim absolute inset-0 bg-black/50" data-close="setg"></div>
+  <div class="panel absolute bottom-0 inset-x-0 rounded-t-3xl p-5" style="background:var(--solid)">
+    <div class="flex items-center justify-between mb-4"><h2 class="text-lg font-bold">Budget &amp; tax</h2><button data-close="setg" class="qb" style="background:var(--fld)"><i data-lucide="x"></i></button></div>
+    <label class="text-xs" style="color:var(--sub)">Max budget (0 = none)</label>
+    <input id="sBudget" class="mb-3 mt-1" inputmode="decimal" placeholder="0.00">
+    <label class="text-xs" style="color:var(--sub)">Tax rate (%)</label>
+    <input id="sTax" class="mb-5 mt-1" inputmode="decimal" placeholder="0">
+    <button id="sSave" class="btn text-white" style="background:#0a84ff">Save settings</button>
+  </div>
+</div>
+
+<!-- Confirm -->
+<div id="conf" class="hidden fixed inset-0 z-[60]">
+  <div class="dim absolute inset-0 bg-black/50"></div>
+  <div class="panel absolute bottom-0 inset-x-0 rounded-t-3xl p-5" style="background:var(--solid)">
+    <div id="cfMsg" class="text-center font-semibold mb-4"></div>
+    <div class="flex gap-3">
+      <button id="cfNo" class="btn" style="background:var(--fld)">Cancel</button>
+      <button id="cfYes" class="btn text-white" style="background:#ff453a">Remove</button>
+    </div>
+  </div>
+</div>
+
+<!-- Scanner -->
+<div id="scan" class="hidden fixed inset-0 z-[70] bg-black">
+  <video id="vid" playsinline muted autoplay class="absolute inset-0 w-full h-full object-cover"></video>
+  <div id="vf" class="absolute left-1/2 top-[38%] w-[86%] h-[26%] rounded-2xl overflow-hidden" style="transform:translate(-50%,-50%);box-shadow:0 0 0 100vmax rgba(0,0,0,.6);border:2px solid #30d158">
+    <div id="laser" class="absolute left-0 right-0 h-0.5" style="background:#30d158;box-shadow:0 0 12px 3px rgba(48,209,88,.9)"></div>
+  </div>
+  <div class="absolute inset-x-0 top-0 flex items-center justify-between px-4 text-white" style="padding-top:calc(env(safe-area-inset-top) + 12px)">
+    <button id="scClose" class="qb glass text-white" style="width:40px;height:40px"><i data-lucide="x"></i></button>
+    <button id="scAuto" class="glass rounded-full px-4 py-2 text-sm font-semibold text-white">Auto-scan: on</button>
+  </div>
+  <div class="absolute inset-x-0 bottom-0 flex flex-col items-center gap-4 text-white" style="padding-bottom:calc(env(safe-area-inset-bottom) + 28px)">
+    <div id="scStatus" class="glass rounded-full px-4 py-2 text-sm text-center mx-4">Align the price tag inside the frame</div>
+    <button id="scShot" class="w-[76px] h-[76px] rounded-full bg-white" style="box-shadow:0 0 0 5px rgba(255,255,255,.35)" aria-label="Capture"></button>
+  </div>
+  <div id="camErr" class="hidden absolute inset-0 flex flex-col items-center justify-center gap-4 p-8 text-center text-white bg-black/90">
+    <i data-lucide="camera-off" style="width:44px;height:44px"></i>
+    <div id="camMsg" class="text-sm"></div>
+    <button id="camManual" class="btn text-white" style="background:#0a84ff;max-width:260px">Add item manually</button>
+  </div>
+</div>
+
+<script>
+const $ = s => document.querySelector(s);
+const CATS = ['Produce','Dairy','Meat','Bakery','Pantry','Drinks','Snacks','Household','Other'];
+const KEY = 'cartscan.v1';
+let S = { items: [], tax: 0, budget: 0, seq: 1 };
+try { Object.assign(S, JSON.parse(localStorage.getItem(KEY) || '{}')); } catch (e) {}
+const save = () => { try { localStorage.setItem(KEY, JSON.stringify(S)); } catch (e) {} };
+const money = n => '₱' + n.toLocaleString('en-PH', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+const uid = () => Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
+const esc = s => String(s).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+const sleep = ms => new Promise(r => setTimeout(r, ms));
+const buzz = () => { try { navigator.vibrate && navigator.vibrate(10); } catch (e) {} };
+const shake = el => gsap.fromTo(el, { x: -8 }, { x: 0, duration: .5, ease: 'elastic.out(1,.3)' });
+
+/* ---------- PWA manifest + icons ---------- */
+function makeIcon(n) {
+  const c = document.createElement('canvas'); c.width = c.height = n; const x = c.getContext('2d');
+  const g = x.createLinearGradient(0, 0, n, n); g.addColorStop(0, '#0a84ff'); g.addColorStop(1, '#30d158');
+  x.fillStyle = g; x.fillRect(0, 0, n, n);
+  x.fillStyle = '#fff'; x.font = `800 ${n * .62}px -apple-system, Helvetica, Arial, sans-serif`; x.textAlign = 'center'; x.textBaseline = 'middle';
+  x.fillText('₱', n / 2, n / 2 + n * .03);
+  return c.toDataURL('image/png');
+}
+(function () {
+  const manifest = { name: 'CartScan', short_name: 'CartScan', start_url: location.href.split('#')[0], display: 'standalone', orientation: 'portrait',
+    background_color: '#000000', theme_color: '#000000', icons: [{ src: makeIcon(512), sizes: '512x512', type: 'image/png' }, { src: makeIcon(192), sizes: '192x192', type: 'image/png' }] };
+  $('#mf').href = 'data:application/manifest+json;charset=utf-8,' + encodeURIComponent(JSON.stringify(manifest));
+  $('#ati').href = makeIcon(180);
+})();
+
+/* ---------- Totals + budget ---------- */
+const disp = { sub: 0, tax: 0, total: 0 };
+const calc = () => { const sub = S.items.reduce((a, i) => a + i.unitPrice * i.quantity, 0), tax = sub * S.tax / 100; return { sub, tax, total: sub + tax }; };
+function paintTotals() { $('#total').textContent = money(disp.total); $('#sub').textContent = money(disp.sub); $('#tax').textContent = money(disp.tax); }
+function animateTotals() {
+  const t = calc();
+  gsap.to(disp, { sub: t.sub, tax: t.tax, total: t.total, duration: .7, ease: 'power2.out', overwrite: true, onUpdate: paintTotals });
+  updateBudget(t.total);
+}
+function updateBudget(total) {
+  const bar = $('#bar'), badge = $('#badge'), lab = $('#budLabel');
+  if (!S.budget) {
+    gsap.to(bar, { width: '0%', duration: .5 }); bar.classList.remove('pulse');
+    badge.textContent = 'No budget'; badge.style.color = ''; badge.style.background = 'var(--fld)';
+    lab.textContent = 'Set a max budget to track spending'; return;
+  }
+  const p = total / S.budget * 100, col = p >= 90 ? '#ff453a' : p >= 70 ? '#ff9f0a' : '#30d158';
+  gsap.to(bar, { width: Math.min(p, 100) + '%', backgroundColor: col, duration: .6, ease: 'power2.out' });
+  bar.classList.toggle('pulse', p >= 90);
+  badge.textContent = Math.round(p) + '% used'; badge.style.color = col; badge.style.background = col + '26';
+  lab.textContent = p > 100 ? money(total - S.budget) + ' over your ' + money(S.budget) + ' budget' : money(S.budget - total) + ' left of ' + money(S.budget);
+}
+
+/* ---------- List ---------- */
+const card = i => `<div class="card-wrap relative mb-3 rounded-2xl overflow-hidden" data-id="${i.id}">
+<div class="absolute inset-0 flex items-center justify-end pr-6 text-white" style="background:#ff453a"><i data-lucide="trash-2"></i></div>
+<div class="card relative rounded-2xl p-3.5" style="background:var(--solid);border:1px solid var(--bd);touch-action:pan-y" data-id="${i.id}">
+<div class="flex items-start gap-3"><div class="flex-1 min-w-0">
+<button data-act="edit" class="block max-w-full text-left font-semibold truncate">${esc(i.name)}</button>
+<div class="mt-1 flex items-center gap-2 text-xs" style="color:var(--sub)"><span class="chip">${esc(i.category)}</span><button data-act="edit" class="tabular-nums">${money(i.unitPrice)} each</button></div></div>
+<div class="font-bold tabular-nums">${money(i.unitPrice * i.quantity)}</div></div>
+<div class="mt-3 flex items-center justify-between">
+<div class="flex items-center gap-3 rounded-full p-1" style="background:var(--fld)"><button data-act="dec" class="qb" aria-label="Decrease"><i data-lucide="minus"></i></button><span class="qty w-6 text-center font-semibold tabular-nums">${i.quantity}</span><button data-act="inc" class="qb" aria-label="Increase"><i data-lucide="plus"></i></button></div>
+<button data-act="del" class="qb" style="color:#ff453a" aria-label="Delete"><i data-lucide="trash-2"></i></button></div></div></div>`;
+
+function renderList(addedId) {
+  const L = $('#list');
+  $('#empty').classList.toggle('hidden', S.items.length > 0);
+  L.innerHTML = S.items.map(card).join('');
+  lucide.createIcons();
+  if (addedId) { const el = L.querySelector(`.card-wrap[data-id="${addedId}"]`); el && gsap.from(el, { scale: .6, opacity: 0, duration: .7, ease: 'back.out(1.7)' }); }
+}
+function pop(id) {
+  const q = document.querySelector(`.card[data-id="${id}"] .qty`); q && gsap.fromTo(q, { scale: 1.5 }, { scale: 1, duration: .4, ease: 'back.out(3)' });
+}
+function removeItem(id) {
+  const w = document.querySelector(`.card-wrap[data-id="${id}"]`);
+  const done = () => { S.items = S.items.filter(i => i.id !== id); save(); renderList(); animateTotals(); };
+  if (!w) return done();
+  gsap.timeline({ onComplete: done })
+    .to(w.querySelector('.card'), { x: -window.innerWidth, opacity: 0, duration: .3, ease: 'power2.in' })
+    .to(w, { height: 0, marginBottom: 0, duration: .25, ease: 'power2.inOut' });
+}
+function setQty(id, q) {
+  const it = S.items.find(i => i.id === id); if (!it) return;
+  buzz();
+  if (q <= 0) return confirmDlg(`Remove "${it.name}" from your cart?`, () => removeItem(id));
+  it.quantity = Math.min(q, 99); save(); renderList(); animateTotals(); pop(id);
+}
+$('#list').addEventListener('click', e => {
+  const b = e.target.closest('[data-act]'); if (!b) return;
+  const id = b.closest('[data-id]').dataset.id, it = S.items.find(i => i.id === id); if (!it) return;
+  const a = b.dataset.act;
+  if (a === 'inc') setQty(id, it.quantity + 1);
+  else if (a === 'dec') setQty(id, it.quantity - 1);
+  else if (a === 'del') removeItem(id);
+  else if (a === 'edit') openSheet('edit', it);
+});
+
+/* swipe to delete */
+let sw = null;
+$('#list').addEventListener('pointerdown', e => {
+  const c = e.target.closest('.card'); if (!c || e.target.closest('button')) return;
+  sw = { c, x: e.clientX, y: e.clientY, dx: 0, on: false };
+});
+addEventListener('pointermove', e => {
+  if (!sw) return; const dx = e.clientX - sw.x, dy = e.clientY - sw.y;
+  if (!sw.on) { if (Math.abs(dx) > 10 && Math.abs(dx) > Math.abs(dy)) sw.on = true; else return; }
+  sw.dx = Math.min(0, dx); gsap.set(sw.c, { x: sw.dx });
+});
+const endSwipe = () => {
+  if (!sw) return; const { c, dx } = sw; sw = null;
+  if (dx < -100) { buzz(); removeItem(c.dataset.id); } else gsap.to(c, { x: 0, duration: .45, ease: 'elastic.out(1,.6)' });
+};
+addEventListener('pointerup', endSwipe); addEventListener('pointercancel', endSwipe);
+
+/* ---------- Layers (bottom sheets) ---------- */
+function show(id) {
+  const L = $('#' + id); L.classList.remove('hidden');
+  gsap.fromTo(L.querySelector('.dim'), { opacity: 0 }, { opacity: 1, duration: .25 });
+  gsap.fromTo(L.querySelector('.panel'), { yPercent: 100 }, { yPercent: 0, duration: .45, ease: 'power3.out' });
+}
+function hide(id, cb) {
+  const L = $('#' + id);
+  gsap.to(L.querySelector('.dim'), { opacity: 0, duration: .2 });
+  gsap.to(L.querySelector('.panel'), { yPercent: 100, duration: .3, ease: 'power3.in', onComplete: () => { L.classList.add('hidden'); cb && cb(); } });
+}
+document.querySelectorAll('[data-close]').forEach(el => el.addEventListener('click', () => hide(el.dataset.close)));
+let cfFn = null;
+function confirmDlg(msg, fn) { $('#cfMsg').textContent = msg; cfFn = fn; show('conf'); }
+$('#cfYes').onclick = () => { const f = cfFn; cfFn = null; hide('conf', () => f && f()); };
+$('#cfNo').onclick = () => hide('conf');
+
+/* ---------- Item sheet ---------- */
+let ed = null;
+function paintSheet() {
+  $('#fQty').textContent = ed.qty;
+  $('#fCat').innerHTML = CATS.map(c => `<button type="button" data-cat="${c}" class="chip ${c === ed.cat ? 'on' : ''}" style="padding:7px 12px;font-size:13px">${c}</button>`).join('');
+}
+$('#fCat').addEventListener('click', e => { const b = e.target.closest('[data-cat]'); if (b) { ed.cat = b.dataset.cat; paintSheet(); } });
+$('#fInc').onclick = () => { ed.qty = Math.min(99, ed.qty + 1); paintSheet(); buzz(); };
+$('#fDec').onclick = () => { ed.qty = Math.max(1, ed.qty - 1); paintSheet(); buzz(); };
+function openSheet(mode, d = {}) {
+  ed = { mode, id: d.id, qty: d.quantity || 1, cat: d.category || 'Other' };
+  $('#sheetTitle').textContent = { add: 'Add item', edit: 'Edit item', scan: 'Confirm scan' }[mode];
+  $('#fName').value = d.name || ''; $('#fPrice').value = d.unitPrice != null ? Number(d.unitPrice).toFixed(2) : '';
+  $('#photoBox').classList.toggle('hidden', !d.photo); if (d.photo) $('#photo').src = d.photo;
+  $('#btnDel').classList.toggle('hidden', mode !== 'edit');
+  paintSheet(); show('sheet');
+}
+$('#btnSave').onclick = () => {
+  const price = parseFloat($('#fPrice').value.replace(',', '.'));
+  if (!isFinite(price) || price < 0) return shake($('#fPrice'));
+  const name = $('#fName').value.trim() || 'Custom item';
+  if (ed.mode === 'edit') {
+    const it = S.items.find(i => i.id === ed.id); if (it) Object.assign(it, { name, unitPrice: price, quantity: ed.qty, category: ed.cat });
+    save(); hide('sheet', () => { renderList(); animateTotals(); });
+  } else {
+    const it = { id: uid(), name, unitPrice: price, quantity: ed.qty, category: ed.cat, timestamp: Date.now() };
+    if (ed.mode === 'scan') S.seq++;
+    S.items.unshift(it); save();
+    hide('sheet', () => { renderList(it.id); animateTotals(); });
+  }
+};
+$('#btnDel').onclick = () => { const id = ed.id; confirmDlg('Remove this item from your cart?', () => hide('sheet', () => removeItem(id))); };
+$('#btnAdd').onclick = () => openSheet('add');
+
+/* ---------- Settings / clear ---------- */
+$('#btnSet').onclick = () => { $('#sBudget').value = S.budget || ''; $('#sTax').value = S.tax || ''; show('setg'); };
+$('#sSave').onclick = () => {
+  const b = parseFloat(($('#sBudget').value || '0').replace(',', '.')), t = parseFloat(($('#sTax').value || '0').replace(',', '.'));
+  S.budget = isFinite(b) && b > 0 ? b : 0; S.tax = isFinite(t) && t > 0 ? Math.min(t, 100) : 0; save();
+  hide('setg', animateTotals);
+};
+$('#btnClear').onclick = () => {
+  if (!S.items.length) return shake($('#btnClear'));
+  confirmDlg('Clear every item in your cart?', () => {
+    gsap.to('.card-wrap', { opacity: 0, x: -60, stagger: .04, duration: .25, onComplete: () => { S.items = []; save(); renderList(); animateTotals(); } });
+  });
+};
+
+/* ---------- Camera + OCR ---------- */
+let stream = null, worker = null, busy = false, scanOpen = false, auto = true, laserTw = null, loopId = 0;
+const vid = $('#vid');
+const setStatus = t => $('#scStatus').textContent = t;
+
+async function getWorker() {
+  if (!worker) {
+    worker = await Tesseract.createWorker('eng', 1, { logger: m => { if (busy && m.status === 'recognizing text') setStatus('Reading… ' + Math.round(m.progress * 100) + '%'); } });
+    await worker.setParameters({ tessedit_pageseg_mode: '6' });
+  }
+  return worker;
+}
+async function openScanner() {
+  scanOpen = true; $('#camErr').classList.add('hidden'); $('#scan').classList.remove('hidden');
+  gsap.fromTo('#scan', { opacity: 0 }, { opacity: 1, duration: .3 });
+  setStatus('Starting camera…');
+  try {
+    if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) throw { name: 'Insecure' };
+    stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: 'environment', width: { ideal: 1920 }, height: { ideal: 1080 } }, audio: false });
+    vid.srcObject = stream; await vid.play();
+    setStatus('Align the price tag inside the frame');
+    laserTw = gsap.fromTo('#laser', { top: '2%' }, { top: '96%', duration: 1.3, ease: 'sine.inOut', repeat: -1, yoyo: true });
+    getWorker().catch(() => setStatus('Could not load OCR engine. Check your connection.'));
+    scanLoop();
+  } catch (e) {
+    const msg = e.name === 'NotAllowedError' ? 'Camera access was denied. Allow it in Settings › Safari › Camera, then reopen the scanner.'
+      : e.name === 'NotFoundError' ? 'No camera found on this device.'
+      : e.name === 'Insecure' ? 'Camera needs a secure (HTTPS) connection. Open this app from its https:// address.'
+      : 'Could not start the camera: ' + (e.message || e.name);
+    $('#camMsg').textContent = msg; $('#camErr').classList.remove('hidden'); lucide.createIcons();
+  }
+}
+function closeScanner() {
+  scanOpen = false; loopId++;
+  laserTw && laserTw.kill(); laserTw = null;
+  stream && stream.getTracks().forEach(t => t.stop()); stream = null; vid.srcObject = null;
+  $('#scan').classList.add('hidden');
+}
+function grabCrop() {
+  const r = $('#vf').getBoundingClientRect(), vr = vid.getBoundingClientRect(), vw = vid.videoWidth, vh = vid.videoHeight;
+  const s = Math.max(vr.width / vw, vr.height / vh), ox = (vw * s - vr.width) / 2, oy = (vh * s - vr.height) / 2;
+  const sx = (r.left - vr.left + ox) / s, sy = (r.top - vr.top + oy) / s, sW = r.width / s, sH = r.height / s;
+  const c = document.createElement('canvas'); c.width = 1200; c.height = Math.round(1200 * sH / sW);
+  c.getContext('2d').drawImage(vid, sx, sy, sW, sH, 0, 0, c.width, c.height);
+  return c;
+}
+function preprocess(c) { // grayscale + contrast stretch
+  const x = c.getContext('2d'), d = x.getImageData(0, 0, c.width, c.height), p = d.data; let sum = 0;
+  for (let i = 0; i < p.length; i += 4) { const g = .299 * p[i] + .587 * p[i + 1] + .114 * p[i + 2]; p[i] = g; sum += g; }
+  const mean = sum / (p.length / 4), k = 1.8;
+  for (let i = 0; i < p.length; i += 4) { let g = (p[i] - mean) * k + mean; g = g < 0 ? 0 : g > 255 ? 255 : g; p[i] = p[i + 1] = p[i + 2] = g; }
+  x.putImageData(d, 0, 0);
+}
+const CATMAP = [['Produce', /apple|banana|tomato|lettuce|onion|potato|fruit|veg|carrot|orange|grape/i], ['Dairy', /milk|cheese|yogurt|butter|egg|cream/i], ['Meat', /chicken|beef|pork|fish|bacon|ham|sausage|steak/i], ['Bakery', /bread|bun|cake|bagel|muffin/i], ['Drinks', /juice|soda|water|coffee|tea|beer|wine|cola/i], ['Snacks', /chips|cookie|candy|chocolate|cracker|nuts/i], ['Household', /soap|paper|detergent|tissue|towel|clean/i], ['Pantry', /rice|pasta|sauce|flour|sugar|oil|cereal|beans|salt/i]];
+const guessCat = t => { for (const [c, re] of CATMAP) if (re.test(t || '')) return c; return 'Other'; };
+function parseOCR(data) {
+  const lines = (data.lines || (data.blocks || []).flatMap(b => b.paragraphs.flatMap(p => p.lines))).filter(l => l.text && l.text.trim());
+  const re = /[₱$P]?\s?(\d{1,5})\s?[.,]\s?(\d{2})(?!\d)/g; let best = null;
+  const H = l => l.bbox ? l.bbox.y1 - l.bbox.y0 : 10, Y = l => l.bbox ? (l.bbox.y0 + l.bbox.y1) / 2 : 0;
+  lines.forEach(l => { let m; re.lastIndex = 0; while ((m = re.exec(l.text))) { const v = parseFloat(m[1] + '.' + m[2]); if (v > 0 && v < 100000 && (!best || H(l) > best.h)) best = { v, h: H(l), l }; } });
+  if (!best) return { price: null };
+  let title = null, bd = Infinity;
+  lines.forEach(l => {
+    const t = l.text.replace(/[₱$]?\d+\s?[.,]\s?\d{2}/g, ' ').replace(/[^A-Za-z0-9&'\- ]/g, ' ').replace(/\s+/g, ' ').trim();
+    if ((t.match(/[A-Za-z]/g) || []).length < 3) return;
+    const d = l === best.l ? 0 : Math.abs(Y(l) - Y(best.l));
+    if (d < bd) { bd = d; title = t; }
+  });
+  if (title) title = title.toLowerCase().replace(/\b\w/g, c => c.toUpperCase()).slice(0, 40);
+  return { price: best.v, title };
+}
+async function attempt(silent) {
+  if (busy || !vid.videoWidth) return;
+  busy = true; const id = loopId;
+  if (!silent) setStatus('Capturing…');
+  try {
+    const c = grabCrop(), photo = c.toDataURL('image/jpeg', .7); preprocess(c);
+    const w = await getWorker(), { data } = await w.recognize(c);
+    if (!scanOpen || id !== loopId) return;
+    const r = parseOCR(data);
+    if (r.price == null) { setStatus(silent ? 'Looking for a price…' : 'No price found. Move closer or add light.'); if (!silent) shake('#vf'); return; }
+    buzz(); closeScanner();
+    openSheet('scan', { name: r.title || `Scanned Item #${S.seq}`, unitPrice: r.price, photo, category: guessCat(r.title) });
+  } catch (e) { setStatus('Scan failed: ' + (e.message || 'try again')); }
+  finally { busy = false; }
+}
+async function scanLoop() {
+  const id = ++loopId;
+  while (scanOpen && id === loopId) { if (auto && !busy && vid.readyState >= 2) await attempt(true); await sleep(700); }
+}
+$('#btnScan').onclick = openScanner;
+$('#scClose').onclick = closeScanner;
+$('#scShot').onclick = () => attempt(false);
+$('#scAuto').onclick = e => { auto = !auto; e.currentTarget.textContent = 'Auto-scan: ' + (auto ? 'on' : 'off'); };
+$('#camManual').onclick = () => { closeScanner(); openSheet('add'); };
+
+/* ---------- Init ---------- */
+lucide.createIcons();
+renderList();
+animateTotals();
+</script>
+</body>
+</html>
